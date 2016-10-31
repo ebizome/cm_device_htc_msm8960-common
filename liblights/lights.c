@@ -37,20 +37,28 @@ static struct light_state_t g_notification;
 static struct light_state_t g_battery;
 static int g_backlight = 255;
 
+#if defined(HTC_M7WLJ)
+char const*const HTLJP_LED_FILE = "/sys/class/leds/indicator/ModeRGB";
+#else
 char const*const AMBER_LED_FILE = "/sys/class/leds/amber/brightness";
 char const*const GREEN_LED_FILE = "/sys/class/leds/green/brightness";
+
+char const*const AMBER_BLINK_FILE = "/sys/class/leds/amber/blink";
+char const*const GREEN_BLINK_FILE = "/sys/class/leds/green/blink";
+#endif
 
 char const*const BUTTON_FILE = "/sys/class/leds/button-backlight/brightness";
 char const*const BUTTON_CURRENTS_FILE = "/sys/class/leds/button-backlight/currents";
 
-char const*const AMBER_BLINK_FILE = "/sys/class/leds/amber/blink";
-char const*const GREEN_BLINK_FILE = "/sys/class/leds/green/blink";
-
 char const*const LCD_BACKLIGHT_FILE = "/sys/class/leds/lcd-backlight/brightness";
 
 enum {
+#if defined(HTC_M7WLJ)
+  LED_ON,
+#else
   LED_AMBER,
   LED_GREEN,
+#endif
   LED_BLANK,
 };
 
@@ -61,8 +69,13 @@ enum {
 };
 
 enum {
+#if defined(HTC_M7WLJ)
+  BLINK_MODE_OFF = 1,
+  BLINK_MODE_NORMAL = 2,
+#else
   BLINK_MODE_OFF = 0,
   BLINK_MODE_NORMAL = 1,
+#endif
   BLINK_MODE_LONG = 4,
 };
 
@@ -88,6 +101,30 @@ static int write_int(const char* path, int value) {
   return written == -1 ? -errno : 0;
 }
 
+#if defined(HTC_M7WLJ)
+static int write_char(const char* path, char* value) {
+  int fd;
+  int bytes, written;
+  char buffer[20];
+  static int already_warned = 0;
+
+  fd = open(path, O_RDWR);
+  if (fd < 0) {
+    if (already_warned == 0) {
+      ALOGE("write_char failed to open %s, %s\n", path, value);
+      already_warned = 1;
+    }
+    return -errno;
+  }
+
+  bytes = snprintf(buffer, sizeof(buffer), "%s\n", value);
+  written = write(fd, buffer, bytes);
+  close(fd);
+
+  return written == -1 ? -errno : 0;
+}
+#endif
+
 void init_globals(void) {
   pthread_mutex_init (&g_lock, NULL);
 }
@@ -102,9 +139,17 @@ static void set_speaker_light_locked(struct light_device_t *dev,
   unsigned int color = LED_BLANK;
   unsigned int blinkMode = BLINK_MODE_OFF;
 
+#if defined(HTC_M7WLJ)
+  char mcolor[8];
+
+  if ((colorRGB >> 8) & 0xFF) color = LED_ON;
+  if ((colorRGB >> 16) & 0xFF) color = LED_ON;
+  if (((colorRGB >> 8) & 0xFF) > ((colorRGB >> 16) & 0xFF)) color = LED_ON;
+#else
   if ((colorRGB >> 8) & 0xFF) color = LED_GREEN;
   if ((colorRGB >> 16) & 0xFF) color = LED_AMBER;
   if (((colorRGB >> 8) & 0xFF) > ((colorRGB >> 16) & 0xFF)) color = LED_GREEN;
+#endif
 
   if (state->flashMode == LIGHT_FLASH_TIMED)
   {
@@ -127,6 +172,12 @@ static void set_speaker_light_locked(struct light_device_t *dev,
   switch (state->flashMode) {
     case LIGHT_FLASH_TIMED:
       switch (color) {
+#if defined(HTC_M7WLJ)
+        case LED_ON:
+          sprintf(mcolor, "%d%06x", blinkMode, colorRGB);
+          write_char(HTLJP_LED_FILE, mcolor);
+          break;
+#else
         case LED_AMBER:
           write_int(AMBER_LED_FILE, 1);
           write_int(GREEN_LED_FILE, 0);
@@ -139,9 +190,14 @@ static void set_speaker_light_locked(struct light_device_t *dev,
           write_int(AMBER_BLINK_FILE, 0);
           write_int(GREEN_BLINK_FILE, blinkMode);
           break;
+#endif
         case LED_BLANK:
+#if defined(HTC_M7WLJ)
+          write_char(HTLJP_LED_FILE, "0");
+#else
           write_int(AMBER_BLINK_FILE, 0);
           write_int(GREEN_BLINK_FILE, 0);
+#endif
           break;
         default:
           ALOGE("set_led_state colorRGB=%08X, unknown color\n", colorRGB);
@@ -150,6 +206,12 @@ static void set_speaker_light_locked(struct light_device_t *dev,
       break;
     case LIGHT_FLASH_NONE:
       switch (color) {
+#if defined(HTC_M7WLJ)
+        case LED_ON:
+          sprintf(mcolor, "1%06x", colorRGB);
+          write_char(HTLJP_LED_FILE, mcolor);
+          break;
+#else
         case LED_AMBER:
           write_int(AMBER_LED_FILE, 1);
           write_int(GREEN_LED_FILE, 0);
@@ -162,9 +224,14 @@ static void set_speaker_light_locked(struct light_device_t *dev,
           write_int(AMBER_BLINK_FILE, 0);
           write_int(GREEN_BLINK_FILE, 0);
           break;
+#endif
         case LED_BLANK:
+#if defined(HTC_M7WLJ)
+          write_char(HTLJP_LED_FILE, "0");
+#else
           write_int(AMBER_LED_FILE, 0);
           write_int(GREEN_LED_FILE, 0);
+#endif
           break;
       }
       break;
@@ -181,10 +248,23 @@ static void set_speaker_light_locked_dual(struct light_device_t *dev,
   unsigned int bcolor = LED_BLANK;
   unsigned int blinkMode = BLINK_MODE_LONG;
 
+#if defined(HTC_M7WLJ)
+  char mcolor[8];
+
+  if ((bcolorRGB >> 8) & 0xFF) bcolor = LED_ON;
+  if ((bcolorRGB >> 16) & 0xFF) bcolor = LED_ON;
+#else
   if ((bcolorRGB >> 8) & 0xFF) bcolor = LED_GREEN;
   if ((bcolorRGB >> 16) & 0xFF) bcolor = LED_AMBER;
+#endif
 
   switch (bcolor) {
+#if defined(HTC_M7WLJ)
+    case LED_ON:
+      sprintf(mcolor, "4%06x", bcolorRGB);
+      write_char(HTLJP_LED_FILE, mcolor);
+      break;
+#else
     case LED_AMBER:
       write_int (AMBER_BLINK_FILE, 1);
       write_int (GREEN_LED_FILE, 1);
@@ -195,6 +275,7 @@ static void set_speaker_light_locked_dual(struct light_device_t *dev,
       write_int (AMBER_LED_FILE, 1);
       write_int (GREEN_BLINK_FILE, 4);
       break;
+#endif
     default:
       ALOGE("set_led_state (dual) unexpected color: bcolorRGB=%08x\n", bcolorRGB);
   }
@@ -308,6 +389,7 @@ static int open_lights(const struct hw_module_t* module, char const* name,
   return 0;
 
 }
+
 
 static struct hw_module_methods_t lights_module_methods = {
   .open = open_lights,
